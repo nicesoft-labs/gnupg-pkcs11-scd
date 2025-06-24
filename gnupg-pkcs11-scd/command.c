@@ -1105,10 +1105,12 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
 		{ 0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
 		0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05,
 		0x00, 0x04, 0x30  };
-	static const unsigned char sha512_prefix[] = /* (2.16.840.1.101.3.4.2.3) */
-		{ 0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
-		0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
-		0x00, 0x04, 0x40  };
+       static const unsigned char sha512_prefix[] = /* (2.16.840.1.101.3.4.2.3) */
+               { 0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+               0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
+               0x00, 0x04, 0x40  };
+       CK_MECHANISM_TYPE mech_type = CKM_RSA_PKCS;
+       int pubkey_type;
 
 	gpg_err_code_t error = GPG_ERR_GENERAL;
 	pkcs11h_certificate_id_t cert_id = NULL;
@@ -1126,9 +1128,18 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
 		INJECT_SHA1,
 		INJECT_SHA224,
 		INJECT_SHA256,
-		INJECT_SHA384,
-		INJECT_SHA512
-	} inject = INJECT_NONE;
+               INJECT_SHA384,
+               INJECT_SHA512,
+               /* For GOST */
+               INJECT_GOSTR3411_CP,
+               INJECT_STRIBOG256,
+               INJECT_STRIBOG512
+       } inject = INJECT_NONE;
+#define NSSCK_VENDOR_PKCS11_RU_TEAM 0xd4321000
+#define NSSCK_VENDOR_PKSC11_RU_TEAM NSSCK_VENDOR_PKCS11_RU_TEAM
+#define CK_VENDOR_PKCS11_RU_TEAM_TC26 NSSCK_VENDOR_PKCS11_RU_TEAM
+#define CKM_GOSTR3410                0x00001201
+#define CKM_GOSTR3410_512 (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x006)
 	char *hash = NULL;
 	const char *l;
 	const struct strgetopt_option options[] = {
@@ -1193,13 +1204,25 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
 		else if (!strcmp(hash, "sha384") && data->size == 0x30) {
 			inject = INJECT_SHA384;
 		}
-		else if (!strcmp(hash, "sha512") && data->size == (0x40 + sizeof(sha512_prefix)) &&
-			!memcmp (data->data, sha512_prefix, sizeof (sha512_prefix))) {
-			inject = INJECT_NONE;
-		}
-		else if (!strcmp(hash, "sha512") && data->size == 0x40) {
-			inject = INJECT_SHA512;
-		}
+               else if (!strcmp(hash, "sha512") && data->size == (0x40 + sizeof(sha512_prefix)) &&
+                       !memcmp (data->data, sha512_prefix, sizeof (sha512_prefix))) {
+                       inject = INJECT_NONE;
+               }
+               else if (!strcmp(hash, "sha512") && data->size == 0x40) {
+                       inject = INJECT_SHA512;
+               }
+               else if (!strcmp(hash, "gost3411_94") || !strcmp(hash, "gost3411_CP") ||
+                        !strcmp(hash, "gostr3411_94") || !strcmp(hash, "gostr3411_CP")) {
+                       inject = INJECT_GOSTR3411_CP;
+               }
+               else if (!strcmp(hash, "gost3411_12_256") || !strcmp(hash, "gostr3411_12_256") ||
+                        !strcasecmp(hash, "stribog256")) {
+                       inject = INJECT_STRIBOG256;
+               }
+               else if (!strcmp(hash, "gost3411_12_512") || !strcmp(hash, "gostr3411_12_512") ||
+                        !strcasecmp(hash, "stribog512")) {
+                       inject = INJECT_STRIBOG512;
+               }
 		else {
 			common_log (LOG_DEBUG, "unsupported hash algo (hash=%s,size=%d)", hash, data->size);
 			error = GPG_ERR_UNSUPPORTED_ALGORITHM;
@@ -1265,14 +1288,30 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
 				oid = sha384_prefix;
 				oid_size = sizeof(sha384_prefix);
 			break;
-			case INJECT_SHA512:
-				oid = sha512_prefix;
-				oid_size = sizeof(sha512_prefix);
-			break;
-			default:
-				error = GPG_ERR_INV_DATA;
-				goto cleanup;
-		}
+                       case INJECT_SHA512:
+                               oid = sha512_prefix;
+                               oid_size = sizeof(sha512_prefix);
+                       break;
+                       /* GOST mechanisms */
+                       case INJECT_GOSTR3411_CP:
+                               oid = "";
+                               oid_size = 0;
+                               mech_type = CKM_GOSTR3410;
+                       break;
+                       case INJECT_STRIBOG256:
+                               oid = "";
+                               oid_size = 0;
+                               mech_type = CKM_GOSTR3410;
+                       break;
+                       case INJECT_STRIBOG512:
+                               oid = "";
+                               oid_size = 0;
+                               mech_type = CKM_GOSTR3410_512;
+                       break;
+                       default:
+                               error = GPG_ERR_INV_DATA;
+                               goto cleanup;
+               }
 
 		if ((_data = (cmd_data_t *)malloc (sizeof (cmd_data_t))) == NULL) {
 			error = GPG_ERR_ENOMEM;
@@ -1330,14 +1369,14 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
 
 	if (
 		(error = common_map_pkcs11_error (
-			pkcs11h_certificate_signAny (
-				cert,
-				CKM_RSA_PKCS,
-				_data->data,
-				_data->size,
-				NULL,
-				&sig_len
-			)
+                       pkcs11h_certificate_signAny (
+                               cert,
+                               mech_type,
+                               _data->data,
+                               _data->size,
+                               NULL,
+                               &sig_len
+                       )
 		)) != GPG_ERR_NO_ERROR
 	) {
 		goto cleanup;
@@ -1350,14 +1389,14 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
 
 	if (
 		(error = common_map_pkcs11_error (
-			pkcs11h_certificate_signAny (
-				cert,
-				CKM_RSA_PKCS,
-				_data->data,
-				_data->size,
-				sig,
-				&sig_len
-			)
+                       pkcs11h_certificate_signAny (
+                               cert,
+                               mech_type,
+                               _data->data,
+                               _data->size,
+                               sig,
+                               &sig_len
+                       )
 		)) != GPG_ERR_NO_ERROR ||
 		(error = assuan_send_data(ctx, sig, sig_len)) != GPG_ERR_NO_ERROR
 	) {
@@ -1413,6 +1452,9 @@ gpg_error_t cmd_pkauth (assuan_context_t ctx, char *line)
 }
 
 /** Decrypt data (set by SETDATA) with certificate id in line. */
+/* For GOST */
+#define CKM_GOSTR3410_KEY_WRAP       0x00001203
+
 gpg_error_t cmd_pkdecrypt (assuan_context_t ctx, char *line)
 {
 	gpg_err_code_t error = GPG_ERR_GENERAL;
@@ -1421,19 +1463,27 @@ gpg_error_t cmd_pkdecrypt (assuan_context_t ctx, char *line)
 	unsigned char *ptext = NULL;
 	size_t ptext_len;
 	int session_locked = 0;
-	cmd_data_t *data = (cmd_data_t *)assuan_get_pointer (ctx);
-	cmd_data_t _data;
+       cmd_data_t *data = (cmd_data_t *)assuan_get_pointer (ctx);
+       cmd_data_t _data;
+       CK_MECHANISM_TYPE mech_type;
 	const char *l;
 
 	l = strgetopt_getopt(line, NULL);
 
-	if (
-		data == NULL ||
-		data->data == NULL
-	) {
-		error = GPG_ERR_INV_DATA;
-		goto cleanup;
-	}
+       if (
+               data == NULL ||
+               data->data == NULL
+       ) {
+               error = GPG_ERR_INV_DATA;
+               goto cleanup;
+       }
+       if (memmem(data->data, data->size, "\x2A\x85\x03", 3)) {
+               /* GOST */
+               mech_type = CKM_GOSTR3410_KEY_WRAP;
+       }
+       else {
+               mech_type = CKM_RSA_PKCS;
+       }
 
 	/*
 	 * Guess.. taken from openpgp card implementation
@@ -1491,13 +1541,13 @@ gpg_error_t cmd_pkdecrypt (assuan_context_t ctx, char *line)
 
 	if (
 		(error = common_map_pkcs11_error (
-			pkcs11h_certificate_decryptAny (
-				cert,
-				CKM_RSA_PKCS,
-				_data.data,
-				_data.size,
-				NULL,
-				&ptext_len
+                       pkcs11h_certificate_decryptAny (
+                               cert,
+                               mech_type,
+                               _data.data,
+                               _data.size,
+                               NULL,
+                               &ptext_len
 			)
 		)) != GPG_ERR_NO_ERROR
 	) {
@@ -1511,13 +1561,13 @@ gpg_error_t cmd_pkdecrypt (assuan_context_t ctx, char *line)
 
 	if (
 		(error = common_map_pkcs11_error (
-			pkcs11h_certificate_decryptAny (
-				cert,
-				CKM_RSA_PKCS,
-				_data.data,
-				_data.size,
-				ptext,
-				&ptext_len
+                       pkcs11h_certificate_decryptAny (
+                               cert,
+                               mech_type,
+                               _data.data,
+                               _data.size,
+                               ptext,
+                               &ptext_len
 			)
 		)) != GPG_ERR_NO_ERROR ||
 		(error = assuan_write_status(ctx, "PADDING", "0")) != GPG_ERR_NO_ERROR ||
@@ -1881,20 +1931,42 @@ gpg_error_t cmd_getattr (assuan_context_t ctx, char *line)
 			goto cleanup;
 		}
 	}
-	else if (!strcmp (l, "DISP-NAME")) {
-		if (
-			(error = assuan_write_status(
-				ctx,
-				"DISP-NAME",
-				"PKCS#11"
-			)) != GPG_ERR_NO_ERROR
-		) {
-			goto cleanup;
-		}
-	}
-	else if (!strcmp (l, "KEY-ATTR")) {
-		int i;
-		for (i=0;i<3;i++) {
+       else if (!strcmp (l, "DISP-NAME")) {
+               if (
+                       (error = assuan_write_status(
+                               ctx,
+                               "DISP-NAME",
+                               "PKCS#11"
+                       )) != GPG_ERR_NO_ERROR
+               ) {
+                       goto cleanup;
+               }
+       }
+       else if (!strcmp (l, "APPTYPE")) {
+               if (
+                       (error = assuan_write_status(
+                               ctx,
+                               "APPTYPE",
+                               "NKS"
+                       )) != GPG_ERR_NO_ERROR
+               ) {
+                       goto cleanup;
+               }
+       }
+       else if (!strcmp (l, "NKS-VERSION")) {
+               if (
+                       (error = assuan_write_status(
+                               ctx,
+                               "NKS-VERSION",
+                               "3"
+                       )) != GPG_ERR_NO_ERROR
+               ) {
+                       goto cleanup;
+               }
+       }
+       else if (!strcmp (l, "KEY-ATTR")) {
+               int i;
+	       for (i=0;i<3;i++) {
 			char buffer[1024];
 
 			/* I am not sure 2048 is right here... */
