@@ -1135,11 +1135,21 @@ gpg_error_t _cmd_pksign_type (assuan_context_t ctx, char *line, int typehint)
                INJECT_STRIBOG256,
                INJECT_STRIBOG512
        } inject = INJECT_NONE;
-#define NSSCK_VENDOR_PKCS11_RU_TEAM 0xd4321000
-#define NSSCK_VENDOR_PKSC11_RU_TEAM NSSCK_VENDOR_PKCS11_RU_TEAM
-#define CK_VENDOR_PKCS11_RU_TEAM_TC26 NSSCK_VENDOR_PKCS11_RU_TEAM
-#define CKM_GOSTR3410                0x00001201
-#define CKM_GOSTR3410_512 (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x006)
+#ifndef NSSCK_VENDOR_PKCS11_RU_TEAM
+# define NSSCK_VENDOR_PKCS11_RU_TEAM 0xd4321000
+#endif
+#ifndef NSSCK_VENDOR_PKSC11_RU_TEAM
+# define NSSCK_VENDOR_PKSC11_RU_TEAM NSSCK_VENDOR_PKCS11_RU_TEAM
+#endif
+#ifndef CK_VENDOR_PKCS11_RU_TEAM_TC26
+# define CK_VENDOR_PKCS11_RU_TEAM_TC26 NSSCK_VENDOR_PKCS11_RU_TEAM
+#endif
+#ifndef CKM_GOSTR3410
+# define CKM_GOSTR3410 0x00001201
+#endif
+#ifndef CKM_GOSTR3410_512
+# define CKM_GOSTR3410_512 (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x006)
+#endif
 	char *hash = NULL;
 	const char *l;
 	const struct strgetopt_option options[] = {
