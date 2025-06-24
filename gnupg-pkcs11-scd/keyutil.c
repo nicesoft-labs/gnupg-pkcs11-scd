@@ -36,6 +36,7 @@
 #include <openssl/x509.h>
 #include <openssl/rsa.h>
 #endif
+#include <ksba.h>
 #include "encoding.h"
 #include "keyutil.h"
 
@@ -195,11 +196,10 @@ cleanup:
 
 	return error;
 }
-/**
-   Convert X.509 RSA public key into gcrypt internal sexp form. Only RSA
-   public keys are accepted at the moment. The result is stored in *sexp,
-   which must be freed (using ) when not needed anymore. *sexp must be
-   NULL on entry, since it is overwritten.
+/*
+   Convert X.509 RSA/ECC/DSA/GOST public key into gcrypt internal sexp form.
+   The result is stored in *sexp, which must be freed when not needed
+   anymore. *sexp must be NULL on entry, since it is overwritten.
 */
 gpg_err_code_t
 keyutil_get_cert_sexp (
@@ -208,38 +208,44 @@ keyutil_get_cert_sexp (
 	gcry_sexp_t *p_sexp
 ) {
 	gpg_err_code_t error = GPG_ERR_GENERAL;
-	gcry_mpi_t n_mpi = NULL;
-	gcry_mpi_t e_mpi = NULL;
-	gcry_sexp_t sexp = NULL;
+        gcry_mpi_t n_mpi = NULL;
+        gcry_mpi_t e_mpi = NULL;
+        gcry_sexp_t sexp = NULL;
+        gpg_error_t err;
+        ksba_sexp_t p;
+        ksba_cert_t ks_cert;
+        size_t n;
 
-	if (
-		(error = keyutil_get_cert_mpi (
-			der,
-			len,
-			&n_mpi,
-			&e_mpi
-		)) != GPG_ERR_NO_ERROR
-	) {
-		goto cleanup;
-	}
+        err = ksba_cert_new (&ks_cert);
+        if (err) {
+                error = GPG_ERR_BAD_KEY;
+                goto cleanup;
+        }
+        err = ksba_cert_init_from_mem (ks_cert, der, len);
+        if (err) {
+                error = GPG_ERR_BAD_KEY;
+                goto cleanup;
+        }
 
-	if (
-		gcry_sexp_build (
-			&sexp,
-			NULL,
-			"(public-key (rsa (n %m) (e %m)))",
-			n_mpi,
-			e_mpi
-		)
-	) {
-		error = GPG_ERR_BAD_KEY;
-		goto cleanup;
-	}
+        /* Get the public key from the certificate.  */
+        p = ksba_cert_get_public_key (ks_cert);
+        n = gcry_sexp_canon_len (p, 0, NULL, NULL);
+        if (!n) {
+                ksba_free (p);
+                error = GPG_ERR_BAD_KEY;
+                goto cleanup;
+        }
 
-	*p_sexp = sexp;
-	sexp = NULL;
-	error = GPG_ERR_NO_ERROR;
-
+        err = gcry_sexp_sscan (p_sexp, NULL, p, n);
+        if (err) {
+                ksba_free (p);
+                error = GPG_ERR_BAD_KEY;
+                goto cleanup;
+        }
+        ksba_free (p);
+        error = GPG_ERR_NO_ERROR;
+        goto cleanup;
+#if 0
 cleanup:
 
 	if (n_mpi != NULL) {
@@ -257,8 +263,10 @@ cleanup:
 		sexp = NULL;
 	}
 
-	return error;
+        return error;
 }
+#endif
+
 
 #if 0
 /**
