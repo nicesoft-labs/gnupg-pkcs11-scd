@@ -245,7 +245,6 @@ keyutil_get_cert_sexp (
         ksba_free (p);
         error = GPG_ERR_NO_ERROR;
         goto cleanup;
-#if 0
 cleanup:
 
 	if (n_mpi != NULL) {
@@ -265,7 +264,6 @@ cleanup:
 
         return error;
 }
-#endif
 
 
 #if 0
